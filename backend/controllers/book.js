@@ -15,6 +15,15 @@ const fs = require('fs')
         imageUrl: `${req.protocol}://${req.get('host')}/images/resized_${req.file.filename}`,
     });
 
+    if (
+        bookObject.ratings &&
+        bookObject.ratings.length === 1 &&
+        bookObject.ratings[0].grade === 0
+    ) {
+        bookObject.ratings = [];
+        bookObject.averageRating = 0;
+    };
+
     book.save()
     .then(() => { res.status(201).json({message: 'Livre enregistré !'})})
     .catch(error => { res.status(400).json( { error })})
@@ -82,49 +91,44 @@ const fs = require('fs')
     };
 
 
-    exports.createRating = async (req, res, next) => {
-        const bookId = req.params.id;
-        const userId = req.auth.userId;
-        const rating = req.body.rating;
-    
-        if (rating < 1 || rating > 5) {
-            return res
-                .status(400)
-                .json({ error: "La note doit être comprise entre 1 et 5." });
-        }
-    
-        try {
-            //Verify if the user has already rated
-            const book = await Book.findById(bookId);
-            if (book.ratings.some((rating) => rating.userId === userId)) {
-                return res
-                    .status(400)
-                    .json({ error: "L'utilisateur a déjà noté ce livre." });
-            }
-    
-            //Add the new rate
-            const updatedBook = await Book.findByIdAndUpdate(
-                bookId,
-                {
-                    $push: { ratings: { userId: userId, grade: rating } },
-                },
-                { new: true }
-            );
-    
-            //Update the new average rate
-            const totalRatings = updatedBook.ratings.length;
-            const totalRatingSum = updatedBook.ratings.reduce(
-                (sum, rating) => sum + rating.grade,
-                0
-            );
-            updatedBook.averageRating = (totalRatingSum / totalRatings).toFixed(0);
-    
-            await updatedBook.save();
-            return res.json(updatedBook);
-        } catch (error) {
-            return res.status(500).json({ error });
+    exports.createRating = (req, res, next) => {
+        // On vérifie que la note est comprise entre 0 et 5
+        if (0 < req.body.rating <= 5) {
+            // Stockage de la requête dans une constante
+            const ratingObject = { ...req.body, grade: req.body.rating };
+            // Suppression du faux _id envoyé par le front
+            delete ratingObject._id;
+            // Récupération du livre auquel on veut ajouter une note
+            Book.findOne({_id: req.params.id})
+                .then(book => {
+                    // Création d'un tableau regroupant toutes les userId des utilisateurs ayant déjà noté le livre en question
+                    const newRatings = book.ratings;
+                    const userIdArray = newRatings.map(rating => rating.userId);
+                    // On vérifie que l'utilisateur authentifié n'a jamais donné de note au livre en question
+                    if (userIdArray.includes(req.auth.userId)) {
+                        res.status(403).json({ message : 'Not authorized' });S
+                    } else {
+                        // Ajout de la note
+                        newRatings.push(ratingObject);
+                        // Création d'un tableau regroupant toutes les notes du livre, et calcul de la moyenne des notes
+                        const grades = newRatings.map(rating => rating.grade);
+                        const averageGrades = average.average(grades);
+                        book.averageRating = averageGrades;
+                        // Mise à jour du livre avec la nouvelle note ainsi que la nouvelle moyenne des notes
+                        Book.updateOne({ _id: req.params.id }, { ratings: newRatings, averageRating: averageGrades, _id: req.params.id })
+                            .then(() => { res.status(201).json()})
+                            .catch(error => { res.status(400).json( { error })});
+                        res.status(200).json(book);
+                    }
+                })
+                .catch((error) => {
+                    res.status(404).json({ error });
+                });
+        } else {
+            res.status(400).json({ message: 'La note doit être comprise entre 1 et 5' });
         }
     };
+    
     
 
     exports.bestRatings = (req, res, next) => {
